@@ -293,7 +293,6 @@ class TestCouchable(unittest.TestCase):
         gc.collect()
         self.assertFalse(self.cdb._obj_by_id, repr(self.cdb._obj_by_id.items()))
 
-
         obj = self.cdb.load(_id)
 
         self.assertEqual(obj.__class__, Simple)
@@ -382,7 +381,7 @@ class TestCouchable(unittest.TestCase):
 
     @attr('couchable')
     def test_21_binaryStrings_1(self):
-        s = 'abc\xaa\xbb\xcc this is the tricky part: \\xddd'
+        s = b'abc\xaa\xbb\xcc this is the tricky part: \\xddd'
         obj = Simple(s=s)
 
         _id = self.cdb.store(obj)
@@ -399,7 +398,7 @@ class TestCouchable(unittest.TestCase):
     @attr('couchable')
     def test_21_binaryStrings_2(self):
         #s = 'abc\xaa\xbb\xcc this is the tricky part: \\xddd'
-        s = ''.join([chr(x) for x in range(256)])
+        s = bytes(tuple(x for x in range(256)))
         obj = Simple(s=s)
 
         _id = self.cdb.store(obj)

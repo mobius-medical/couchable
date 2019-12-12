@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright (c) 2010 Eli Stevens
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -75,7 +76,7 @@ log_internal.setLevel(logging.WARN)
 def importstr(module_str, from_=None):
     """
     >>> importstr('os')
-    <module 'os' from '...os.py'>
+    <module 'os' from '...os.py...'>
     >>> importstr('math', 'fabs')
     <built-in function fabs>
     """
@@ -621,7 +622,7 @@ class CouchableDb(object):
         """
         >>> cdb=CouchableDb('testing')
         >>> obj = object()
-        >>> pprint.pprint(cdb._objInfo_doc(obj, {}))
+        >>> pprint.pprint(cdb._objInfo_doc(obj, {}))  #doctest +IGNORE_UNICODE
         {'couchable:': {'class': 'object',
                         'module': '...builtin...',
                         'pid': ...,
@@ -803,17 +804,16 @@ class CouchableDb(object):
         pickle_binary = False
         if isinstance(data, binary_type):
             # Try out three most popular encodings, otherwise default to pickle
-            for codec in ["UTF-8", "UTF-16", "Latin-1"]:
-                try:
-                    data = data.decode(codec)
-                    break
-                except UnicodeDecodeError:
-                    continue
-            else:
-                log_internal.warning("Could not decode binary string, pickle object")
+            if  b'\0' in data:
                 pickle_binary = True
+            else:
+                try:
+                    data = data.decode("UTF-8")
+                except UnicodeDecodeError:
+                    log_internal.warning("Could not decode binary string, pickle object")
+                    pickle_binary = True
 
-        if '\0' in data or pickle_binary or len(data) > self._maxStrLen:
+        if pickle_binary or len(data) > self._maxStrLen:
             #return '{}{}:{}:{}'.format(FIELD_NAME, 'repr', typestr(data), data.encode('hex_codec'))
             return self._pack_pickle(parent_doc, data, attachment_dict, name, isKey)
 
@@ -1071,7 +1071,7 @@ class CouchableDb(object):
             if isinstance(doc, bytes):
                 # JSON Documents should be unicode encoded by standard
                 doc = doc.decode("UTF-8")
-            if isinstance(doc, str):
+            if isinstance(doc, string_types):
                 if doc.startswith(FIELD_NAME):
                     _, method_str, data = doc.split(':', 2)
 
@@ -1472,10 +1472,11 @@ def gzip_compress(data, compresslevel=1):
     @rtype: byte string
     @return: The compressed byte string.
     """
-    if isinstance(data, str):
-        data = data.encode("UTF-8")
-    elif not isinstance(data, bytes):
-        data = str(data).encode("UTF-8")
+    if not isinstance(data, bytes):
+        if sys.version_info.major < 3:
+            data = str(data).encode("UTF-8")
+        else:
+            data = str(data, "UTF-8")
     log_internal.debug("Compress byte string with length: {}".format(len(data)))
 
     buffer = io.BytesIO()
