@@ -46,6 +46,8 @@ if sys.version_info.major < 3:
     import cPickle as pickle
 else:
     import pickle
+# Print python version for test log
+print(sys.version)
 
 #def dumpcdb(func):
 #    def test_dumpcdb_(self):
