@@ -24,7 +24,7 @@ The public API of couchable consists of:
     - L{packer}: Extends the list of built-in or C types supported.
     - L{registerDocType}, L{CouchableDoc}: For adding new document classes.
     - L{registerAttachmentType}, L{CouchableAttachment}: For adding classes to store as attachments.
-    - L{gzip_compress}, L{gzip_decompress}: Helper functions for compressing attachments.
+    - L{doGzip}, L{doGunzip}: Helper functions for compressing attachments.
     - L{newid}: Helper function to make document IDs readable.
 
 For more information, please see:
@@ -46,5 +46,5 @@ from .core import registerDocType, CouchableDoc
 from .core import registerAttachmentType, CouchableAttachment
 from .core import registerPickleType, registerNoneType, registerUncouchableType
 from .core import custom_packer
-from .core import gzip_compress, gzip_decompress
+from .core import doGzip, doGunzip
 from .core import newid

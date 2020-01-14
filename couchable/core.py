@@ -441,7 +441,7 @@ class CouchableDb(object):
                 if 'pickles' in attachment_dict:
                     content_tup = attachment_dict['pickles']
 
-                    content = gzip_compress(pickle_object(content_tup))
+                    content = doGzip(doPickle(content_tup))
                     content_type = 'application/pickle'
 
                     attachment_dict['pickles'] = (content, content_type)
@@ -1084,8 +1084,8 @@ class CouchableDb(object):
                     elif method_str == 'pickle':
                         if 'pickles' not in parent_doc[FIELD_NAME]:
                             attachment_response = self.db.get_attachment(parent_doc, 'pickles')
-                            parent_doc[FIELD_NAME]['pickles'] = unpickle_object(
-                                gzip_decompress(attachment_response.read())
+                            parent_doc[FIELD_NAME]['pickles'] = doUnpickle(
+                                doGunzip(attachment_response.read())
                             )
                             #parent_doc[FIELD_NAME]['pickles'] = collections.defaultdict(int)
 
@@ -1455,7 +1455,7 @@ def zlib_buffer_fixed():
         return True
 
 
-def gzip_compress(data, compresslevel=1):
+def doGzip(data, compresslevel=1):
     """
     Helper function for compressing byte strings.
 
@@ -1493,7 +1493,7 @@ def gzip_compress(data, compresslevel=1):
     return buffer.getvalue()
 
 
-def gzip_decompress(data):
+def doGunzip(data):
     """
     Helper function for decompressing byte strings.
 
@@ -1530,21 +1530,24 @@ def gzip_decompress(data):
     return read_buffer.getvalue()
 
 
-def pickle_object(obj):
+def doPickle(obj):
     log_internal.debug("Pickle object of type: {}".format(type(obj)))
     return pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
 
 
-def unpickle_object(data):
+def doUnpickle(data):
     log_internal.debug("Unpickle byte string of length: {}".format(len(data)))
     return pickle.loads(data)
 
 
 _attachment_handlers = collections.OrderedDict()
-def registerAttachmentType(type_,
-                           serialize_func=pickle_object,
-                           deserialize_func=unpickle_object,
-                           content_type='application/octet-stream', gzip=True):
+def registerAttachmentType(
+        type_,
+        serialize_func=doPickle,
+        deserialize_func=doUnpickle,
+        content_type='application/octet-stream',
+        gzip=True
+):
     """
     @type  type_: type
     @param type_: Instances of this type will be stored as attachments instead of CouchDB documents.
@@ -1566,7 +1569,7 @@ def registerAttachmentType(type_,
             'application/octet-stream')
     """
     if gzip:
-        handler_tuple = (lambda data: gzip_compress(serialize_func(data)), lambda data: deserialize_func(gzip_decompress(data)), content_type)
+        handler_tuple = (lambda data: doGzip(serialize_func(data)), lambda data: deserialize_func(doGunzip(data)), content_type)
     else:
         handler_tuple = (serialize_func, deserialize_func, content_type)
 
@@ -1597,7 +1600,7 @@ class CouchableAttachment(object):
         @rtype: byte string
         @return: The serialized data.
         """
-        return pickle_object(obj)
+        return doPickle(obj)
 
     @staticmethod
     def unpack(data):
@@ -1611,7 +1614,7 @@ class CouchableAttachment(object):
         @rtype: object
         @return: The unserialized object.
         """
-        return unpickle_object(data)
+        return doUnpickle(data)
 
 registerAttachmentType(CouchableAttachment,
         lambda obj: CouchableAttachment.pack(obj),
