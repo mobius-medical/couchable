@@ -64,6 +64,7 @@ else:
     binary_type = bytes
     integer_types = int,
     string_types = str,
+    unicode = str
 
 
 log_api = logging.getLogger(__name__.replace('core', 'api'))
@@ -454,7 +455,12 @@ class CouchableDb(object):
                 if total_len > self._maxStrLen * 2:
                     mime_list.append((obj, doc, attachment_dict, total_len))
                 else:
-                    doc['_attachments'] = {content_name: {'content_type': content_type, 'data': base64.b64encode(content).decode("UTF-8")} for content_name, (content, content_type) in attachment_dict.items()}
+                    doc['_attachments'] = {
+                        content_name: {
+                            'content_type': content_type,
+                            'data': base64.b64encode(content).decode('UTF-8')
+                        } for content_name, (content, content_type) in attachment_dict.items()
+                    }
                     bulk_list.append((obj, doc))
 
         #print 'mime', mime_list
@@ -469,8 +475,7 @@ class CouchableDb(object):
                 obj._rev = doc['_rev']
                 obj._couchableMultipartPending = True
 
-            fileobj = io.StringIO()
-
+            fileobj = io.BytesIO()
             with couchdb.multipart.MultipartWriter(fileobj, headers=None, subtype='form-data') as mpw:
                 mime_headers = {'Content-Disposition': '''form-data; name="_doc"'''}
                 try:
@@ -483,14 +488,17 @@ class CouchableDb(object):
                     mime_headers = {'Content-Disposition': '''form-data; name="_attachments"; filename="{}"'''.format(content_name)}
                     mpw.add(content_type, content, mime_headers)
 
-            header_str, blank_str, body = fileobj.getvalue().split('\r\n', 2)
+            header_str, blank_str, body = fileobj.getvalue().split(b'\r\n', 2)
 
-            #print repr(header_str)
-            #print body
-
-            http_headers = {'Referer': self.db.resource.url, 'Content-Type': header_str[len('Content-Type: '):]}
-            params = {}
-            status, msg, data = self.db.resource.post(doc['_id'], body, http_headers, **params)
+            # Make sure all post request components are bytes
+            db_url = self.db.resource.url
+            if isinstance(db_url, unicode):
+                db_url = db_url.encode("UTF-8")
+            doc_id = doc['_id']
+            if isinstance(doc_id, unicode):
+                doc_id = doc_id.encode("UTF-8")
+            http_headers = {b'Referer': db_url, b'Content-Type': header_str[len('Content-Type: '):]}
+            status, msg, data = self.db.resource.post(doc_id, body, http_headers)
 
             if status != 201:
                 log_internal.warning("Error updating multipart, status: {}, msg: {}".format(status, msg))
@@ -803,8 +811,8 @@ class CouchableDb(object):
         """
         pickle_binary = False
         if isinstance(data, binary_type):
-            # Try out three most popular encodings, otherwise default to pickle
-            if  b'\0' in data:
+            # Try out UTF-8, otherwise default to pickle
+            if b'\0' in data:
                 pickle_binary = True
             else:
                 try:
