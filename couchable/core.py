@@ -493,10 +493,10 @@ class CouchableDb(object):
             # Make sure all post request components are bytes
             db_url = self.db.resource.url
             if isinstance(db_url, unicode):
-                db_url = db_url.encode("UTF-8")
+                db_url = db_url.encode('UTF-8')
             doc_id = doc['_id']
             if isinstance(doc_id, unicode):
-                doc_id = doc_id.encode("UTF-8")
+                doc_id = doc_id.encode('UTF-8')
             http_headers = {b'Referer': db_url, b'Content-Type': header_str[len('Content-Type: '):]}
             status, msg, data = self.db.resource.post(doc_id, body, http_headers)
 
@@ -816,7 +816,7 @@ class CouchableDb(object):
                 pickle_binary = True
             else:
                 try:
-                    data = data.decode("UTF-8")
+                    data = data.decode('UTF-8')
                 except UnicodeDecodeError:
                     log_internal.warning("Could not decode binary string, pickle object")
                     pickle_binary = True
@@ -1078,7 +1078,7 @@ class CouchableDb(object):
         try:
             if isinstance(doc, bytes):
                 # JSON Documents should be unicode encoded by standard
-                doc = doc.decode("UTF-8")
+                doc = doc.decode('UTF-8')
             if isinstance(doc, string_types):
                 if doc.startswith(FIELD_NAME):
                     _, method_str, data = doc.split(':', 2)
@@ -1101,9 +1101,9 @@ class CouchableDb(object):
 
                     type_str, data = data.split(':', 1)
                     if method_str == 'append':
-                        if type_str in ('unicode', "str"):
+                        if type_str in ('unicode', 'str'):
                             if isinstance(data, bytes):
-                                return data.decode("UTF-8")
+                                return data.decode('UTF-8')
                             else:
                                 return data
 
@@ -1482,9 +1482,9 @@ def doGzip(data, compresslevel=1):
     """
     if not isinstance(data, bytes):
         if sys.version_info.major < 3:
-            data = str(data).encode("UTF-8")
+            data = str(data).encode('UTF-8')
         else:
-            data = str(data, "UTF-8")
+            data = str(data, 'UTF-8')
     log_internal.debug("Compress byte string with length: {}".format(len(data)))
 
     buffer = io.BytesIO()
@@ -1665,7 +1665,7 @@ def findBadJson(obj, prefix=''):
     elif isinstance(obj, bytes):
         # By JSON standard there should only be unicode strings, but we keep this check
         try:
-            obj.decode("UTF-8")
+            obj.decode('UTF-8')
         except UnicodeDecodeError:
             bad_list.append('{} not UTF-8 {}, {}'.format(prefix, obj, type(obj)))
     elif isinstance(obj, string_types + integer_types):
