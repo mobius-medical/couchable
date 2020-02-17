@@ -23,14 +23,14 @@ from setuptools import setup
 
 setup(
     name='couchable',
-    version='0.5.1',
+    version='1.0.0beta1',
     author='Eli Stevens',
     author_email='wickedgrey@gmail.com',
     url='http://github.com/wickedgrey/couchable',
     description='Allows arbitrary python objects to be stored in CouchDB, while keeping the resulting CouchDB document as "natural" as possible.',
     packages=['couchable',],
     install_requires=[
-            'CouchDb >= 0.8',
+            'CouchDb >= 1.2',
             'requests',
         ],
     classifiers=[
