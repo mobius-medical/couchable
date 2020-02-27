@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Copyright (c) 2010 Eli Stevens
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -18,8 +19,54 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
-# logging
+# Future compatibility
+from __future__ import division, absolute_import, print_function, unicode_literals
+
+# Stdlib
+import base64
+import collections
+import copy
+import gzip
+import hashlib
+import inspect
+import io
 import logging
+import math
+import os
+import pprint
+import random
+import string
+import sys
+import time
+import uuid
+import weakref
+
+# External dependencies
+import couchdb
+import couchdb.client
+import couchdb.design
+import couchdb.http
+import couchdb.json
+import couchdb.multipart
+import requests
+
+# Compatibility imports
+if sys.version_info.major < 3:
+    import cPickle as pickle
+    import __builtin__ as builtins
+    binary_type = str
+    integer_types = (int, long)
+    string_types = basestring,
+    from itertools import izip as zip
+else:
+    import pickle
+    import builtins
+    binary_type = bytes
+    integer_types = int,
+    string_types = str,
+    unicode = str
+
+
 log_api = logging.getLogger(__name__.replace('core', 'api'))
 log_api.setLevel(logging.WARN)
 
@@ -27,46 +74,10 @@ log_internal = logging.getLogger(__name__.replace('core', 'internal'))
 log_internal.setLevel(logging.WARN)
 
 
-"""
-foo
-"""
-import base64
-import collections
-import copy
-import cPickle as pickle
-import cStringIO
-import datetime
-import gzip
-import hashlib
-import inspect
-import itertools
-import os
-import pprint
-import random
-import re
-import string
-import subprocess
-import sys
-import tempfile
-import time
-import traceback
-import uuid
-import weakref
-
-#import yaml
-import couchdb
-import couchdb.client
-import couchdb.design
-import couchdb.http
-import couchdb.json
-import couchdb.multipart
-
-import requests
-
 def importstr(module_str, from_=None):
     """
     >>> importstr('os')
-    <module 'os' from '.../os.pyc'>
+    <module 'os' from '...os.py...'>
     >>> importstr('math', 'fabs')
     <built-in function fabs>
     """
@@ -78,10 +89,11 @@ def importstr(module_str, from_=None):
         return getattr(module, from_)
     return module
 
+
 def typestr(type_):
     if not isinstance(type_, type):
         type_ = type(type_)
-    if type_.__name__ in __builtins__:
+    if hasattr(builtins, type_.__name__) or type_ == type(None):
         return type_.__name__
     else:
         return '{}.{}'.format(type_.__module__, type_.__name__)
@@ -163,7 +175,7 @@ def findHandler(cls_or_name, handler_dict):
     if (cls_or_name,) in handler_dict:
         return handler_dict[(cls_or_name,)]
     elif isinstance(cls_or_name, type):
-        for type_, handler in reversed(handler_dict.items()):
+        for type_, handler in reversed(list(handler_dict.items())):
             if isinstance(type_, type) and issubclass(cls_or_name, type_):
                 handler_dict[(cls_or_name,)] = type_, handler
                 return type_, handler
@@ -191,8 +203,6 @@ class CouchableDb(object):
         Creates a CouchableDb wrapper around a couchdb.Database object.  If
         the database does not yet exist, it will be created.
 
-        @type  name: str
-        @param name: Name of the CouchDB database to connect to.
         @type  url: str
         @param url: The URL of the CouchDB server.  Uses the couchdb default of http://localhost:5984/
         @type  db: couchdb.Database
@@ -201,6 +211,11 @@ class CouchableDb(object):
 
         self._db_pid = None
         self._db = None
+        self._done_dict = collections.OrderedDict()
+        self._cycle_set = set()
+        self._additiveOnly = None
+        self._skip_list = []
+
 
         if db is not None:
             assert url is None
@@ -223,6 +238,7 @@ class CouchableDb(object):
             if requests.head(self.url).status_code != 200:
                 put_dict = requests.put(self.url).json()
                 if 'ok' not in put_dict:
+                    # FIXME: Make custom Exception
                     raise Exception("Could not create DB: {!r}".format(put_dict))
 
 
@@ -439,7 +455,12 @@ class CouchableDb(object):
                 if total_len > self._maxStrLen * 2:
                     mime_list.append((obj, doc, attachment_dict, total_len))
                 else:
-                    doc['_attachments'] = {content_name: {'content_type': content_type, 'data': base64.b64encode(content)} for content_name, (content, content_type) in attachment_dict.items()}
+                    doc['_attachments'] = {
+                        content_name: {
+                            'content_type': content_type,
+                            'data': base64.b64encode(content).decode('UTF-8')
+                        } for content_name, (content, content_type) in attachment_dict.items()
+                    }
                     bulk_list.append((obj, doc))
 
         #print 'mime', mime_list
@@ -454,8 +475,7 @@ class CouchableDb(object):
                 obj._rev = doc['_rev']
                 obj._couchableMultipartPending = True
 
-            fileobj = cStringIO.StringIO()
-
+            fileobj = io.BytesIO()
             with couchdb.multipart.MultipartWriter(fileobj, headers=None, subtype='form-data') as mpw:
                 mime_headers = {'Content-Disposition': '''form-data; name="_doc"'''}
                 try:
@@ -468,25 +488,28 @@ class CouchableDb(object):
                     mime_headers = {'Content-Disposition': '''form-data; name="_attachments"; filename="{}"'''.format(content_name)}
                     mpw.add(content_type, content, mime_headers)
 
-            header_str, blank_str, body = fileobj.getvalue().split('\r\n', 2)
+            header_str, blank_str, body = fileobj.getvalue().split(b'\r\n', 2)
 
-            #print repr(header_str)
-            #print body
-
-            http_headers = {'Referer': self.db.resource.url, 'Content-Type': header_str[len('Content-Type: '):]}
-            params = {}
-            status, msg, data = self.db.resource.post(doc['_id'], body, http_headers, **params)
+            # Make sure all post request components are bytes
+            db_url = self.db.resource.url
+            if isinstance(db_url, unicode):
+                db_url = db_url.encode('UTF-8')
+            doc_id = doc['_id']
+            if isinstance(doc_id, unicode):
+                doc_id = doc_id.encode('UTF-8')
+            http_headers = {b'Referer': db_url, b'Content-Type': header_str[len('Content-Type: '):]}
+            status, msg, data = self.db.resource.post(doc_id, body, http_headers)
 
             if status != 201:
-                log_internal.warn("Error updating multipart, status: {}, msg: {}".format(staus, msg))
-                raise Exception("Error updating multipart, status: {}, msg: {}".format(staus, msg))
+                log_internal.warning("Error updating multipart, status: {}, msg: {}".format(status, msg))
+                # FIXME: Make custom Exception
+                raise Exception("Error updating multipart, status: {}, msg: {}".format(status, msg))
                 #print 'status', status
                 #print 'msg', msg
                 #print 'data', str(data.getvalue())
                 #assert status == 201
 
             data_dict = couchdb.json.decode(data.getvalue())
-
             #print data_dict
 
             obj._id = data_dict['id']
@@ -499,16 +522,16 @@ class CouchableDb(object):
         #print 'hitting bulk docs:', [x for x in [str(bulk_tup[1].get('_id', None)) for bulk_tup in bulk_list] if 'CoordinateSystem' not in x]
         try:
             ret_list = self.db.update([bulk_tup[1] for bulk_tup in bulk_list])
-        except UnicodeDecodeError as e:
+        except UnicodeDecodeError:
             for bulk_obj, bulk_doc in bulk_list:
                 for s in findBadJson(bulk_doc, bulk_obj._id):
                     log_api.error("Bad json: {}".format(s))
             raise
 
         #print ret_list
-        for (success, _id, _rev), (obj, doc) in itertools.izip(ret_list, bulk_list):
+        for (success, _id, _rev), (obj, doc) in zip(ret_list, bulk_list):
             if not success:
-                log_internal.warn("Error updating {}: {} @ {}".format(type(obj), _id, getattr(obj, '_rev', None)))
+                log_internal.warning("Error updating {}: {} @ {}".format(type(obj), _id, getattr(obj, '_rev', None)))
                 #log_internal.warn("Error updating {}: {} > {}".format(type(obj), _id, vars(_rev)))
                 raise _rev
             else:
@@ -519,10 +542,10 @@ class CouchableDb(object):
         #log_internal.error("outside for")
         #print "outside for", self._obj_by_id.items(), store_list
 
-        del self._done_dict
-        del self._cycle_set
-        del self._skip_list
-        del self._additiveOnly
+        self._done_dict = collections.OrderedDict()
+        self._cycle_set = set()
+        self._additiveOnly = None
+        self._skip_list = []
 
         if not isinstance(what, list):
             return what._id
@@ -577,7 +600,7 @@ class CouchableDb(object):
         #except RuntimeError:
         #    log_internal.error(name)
         #    raise
-        except Exception, e:
+        except Exception as exc:
             log_internal.error('{}, {} in base_cls {}, handler {} isKey: {}'.format(name, cls, base_cls, handler, isKey))
             raise
         #finally:
@@ -607,8 +630,11 @@ class CouchableDb(object):
         """
         >>> cdb=CouchableDb('testing')
         >>> obj = object()
-        >>> pprint.pprint(cdb._objInfo_doc(obj, {}))
-        {'couchable:': {'class': 'object', 'module': '__builtin__', 'pid': ..., 'time': ...}}
+        >>> pprint.pprint(cdb._objInfo_doc(obj, {}))  #doctest +IGNORE_UNICODE
+        {'couchable:': {'class': 'object',
+                        'module': '...builtin...',
+                        'pid': ...,
+                        'time': ...}}
         """
         cls = type(data)
         doc.setdefault(FIELD_NAME, {})
@@ -637,7 +663,7 @@ class CouchableDb(object):
         {'couchable:': {'args': [1, 2, 3],
                         'class': 'tuple',
                         'kwargs': {},
-                        'module': '__builtin__',
+                        'module': '...builtin...',
                         'pid': ...,
                         'time': ...}
         """
@@ -760,14 +786,14 @@ class CouchableDb(object):
                 return '{}{}:{}'.format(FIELD_NAME, 'module', name)
 
 
-    @_packer(str, unicode)
+    @_packer(binary_type, *string_types)
     def _pack_native(self, parent_doc, data, attachment_dict, name, isKey):
         """
         >>> cdb=CouchableDb('testing')
         >>> parent_doc = {}
         >>> attachment_dict = {}
 
-        >>> data = 'byte string'
+        >>> data = b'byte string'
         >>> cdb._pack_native(parent_doc, data, attachment_dict, 'myname', False)
         'byte string'
         >>> cdb._pack_native(parent_doc, data, attachment_dict, 'myname', True)
@@ -783,23 +809,19 @@ class CouchableDb(object):
         >>> cdb._pack_native(parent_doc, data, attachment_dict, 'myname', False)
         'couchable:append:str:couchable:must escape this'
         """
-        #log_internal.debug("{}: {} @ {}, {}".format(type(data), getattr(data, '_id', None), getattr(data, '_rev', None), name))
-        #if len(data) > 1024:
-        #    return self._pack_attachment(parent_doc, data, attachment_dict, name, isKey)
+        pickle_binary = False
+        if isinstance(data, binary_type):
+            # Try out UTF-8, otherwise default to pickle
+            if b'\0' in data:
+                pickle_binary = True
+            else:
+                try:
+                    data = data.decode('UTF-8')
+                except UnicodeDecodeError:
+                    log_internal.warning("Could not decode binary string, pickle object")
+                    pickle_binary = True
 
-        highBytes = False
-
-        if isinstance(data, str):
-            try:
-                data.decode('utf8')
-                # This means that it's either clean ascii, or encoded as utf8,
-                # as god intended.  We can work with it.
-            except:
-                # Otherwise it's latin1 or binary or who knows what.  Pickles.
-                #print "Found some high bytes:", data.encode('hex_codec')
-                highBytes = True
-
-        if '\0' in data or highBytes or len(data) > self._maxStrLen:
+        if pickle_binary or len(data) > self._maxStrLen:
             #return '{}{}:{}:{}'.format(FIELD_NAME, 'repr', typestr(data), data.encode('hex_codec'))
             return self._pack_pickle(parent_doc, data, attachment_dict, name, isKey)
 
@@ -808,7 +830,7 @@ class CouchableDb(object):
         else:
             return data
 
-    @_packer(int, long, float, type(None))
+    @_packer(float, type(None), *integer_types)
     def _pack_native_keyAsRepr(self, parent_doc, data, attachment_dict, name, isKey):
         """
         >>> cdb=CouchableDb('testing')
@@ -824,6 +846,11 @@ class CouchableDb(object):
         12.34
         >>> cdb._pack_native_keyAsRepr(parent_doc, data, attachment_dict, 'myname', True)
         'couchable:repr:float:12.34'
+        >>> data = None
+        >>> cdb._pack_native_keyAsRepr(parent_doc, data, attachment_dict, 'myname', False) is None
+        True
+        >>> cdb._pack_native_keyAsRepr(parent_doc, data, attachment_dict, 'myname', True)
+        'couchable:repr:builtins.NoneType:None'
         """
         #log_internal.debug("{}: {} @ {}, {}".format(type(data), getattr(data, '_id', None), getattr(data, '_rev', None), name))
         if isKey:
@@ -983,7 +1010,7 @@ class CouchableDb(object):
 
         doc = {}
         for k,v in data.items():
-            if k not in private_keys and k not in set(['_attachments', '_cdb', '_couchableMultipartPending']):
+            if k not in private_keys and k not in {'_attachments', '_cdb', '_couchableMultipartPending'}:
                 if isObjDict:
                     k_str = str(k)
                 else:
@@ -1049,7 +1076,10 @@ class CouchableDb(object):
 
     def _unpack(self, parent_doc, doc, loaded_dict, inst=None):
         try:
-            if isinstance(doc, (str, unicode)):
+            if isinstance(doc, bytes):
+                # JSON Documents should be unicode encoded by standard
+                doc = doc.decode('UTF-8')
+            if isinstance(doc, string_types):
                 if doc.startswith(FIELD_NAME):
                     _, method_str, data = doc.split(':', 2)
 
@@ -1062,26 +1092,26 @@ class CouchableDb(object):
                     elif method_str == 'pickle':
                         if 'pickles' not in parent_doc[FIELD_NAME]:
                             attachment_response = self.db.get_attachment(parent_doc, 'pickles')
-                            parent_doc[FIELD_NAME]['pickles'] = pickle.loads(doGunzip(attachment_response.read()))
+                            parent_doc[FIELD_NAME]['pickles'] = doUnpickle(
+                                doGunzip(attachment_response.read())
+                            )
                             #parent_doc[FIELD_NAME]['pickles'] = collections.defaultdict(int)
 
                         return parent_doc[FIELD_NAME]['pickles'][data]
 
                     type_str, data = data.split(':', 1)
                     if method_str == 'append':
-                        if type_str == 'unicode':
-                            if isinstance(data, unicode):
-                                return data
+                        if type_str in ('unicode', 'str'):
+                            if isinstance(data, bytes):
+                                return data.decode('UTF-8')
                             else:
-                                return unicode(data, 'utf8')
-                        if type_str == 'str':
-                            return str(data)
+                                return data
 
                     elif method_str == 'repr':
-                        if type_str in __builtins__:
-                            return __builtins__.get(type_str)(data)
-                        elif type_str == '__builtin__.NoneType':
+                        if type_str == 'NoneType':
                             return None
+                        elif hasattr(builtins, type_str):
+                            return getattr(builtins, type_str)(data)
                         else:
                             return importstr(*type_str.rsplit('.', 1))(data)
 
@@ -1110,7 +1140,7 @@ class CouchableDb(object):
                 else:
                     return doc
 
-            elif isinstance(doc, (int, float)):
+            elif isinstance(doc, integer_types + (float,)):
                 return doc
 
             elif isinstance(doc, list):
@@ -1209,7 +1239,7 @@ class CouchableDb(object):
             loaded_dict = {(x.id if isinstance(x, couchdb.client.Row) else x['_id']): (x.doc if isinstance(x, couchdb.client.Row) else x) for x in loaded}
         elif isinstance(loaded, dict):
             loaded_dict = loaded
-        elif loaded == None:
+        elif loaded is None:
             loaded_dict = {}
         else:
             raise TypeError("'loaded' must be list, dict, or not specified.")
@@ -1228,7 +1258,7 @@ class CouchableDb(object):
 
         for item in load_list:
             #print "item", item
-            if isinstance(item, basestring):
+            if isinstance(item, string_types):
                 id_list.append(item)
             elif isinstance(item, couchdb.client.Row):
                 id_list.append(item.id)
@@ -1244,6 +1274,7 @@ class CouchableDb(object):
             elif hasattr(item, '_id'):
                 id_list.append(item._id)
             else:
+                # FIXME: Make custom Exception
                 raise Exception("Can't figure out how to load {!r}".format(item))
 
         # FIXME: pre-stuff the loaded_dict cache here
@@ -1410,7 +1441,28 @@ def newid(obj, id_func=None, noUuid=False, noType=False, sep=':'):
         obj._id = sep.join(id_list).lstrip('_')
         log_internal.debug("Assigning _id {} to {}".format(obj._id, obj))
 
-# Attachments
+
+def zlib_buffer_fixed():
+    """Helper function to check whether chunking is necessary
+
+    Chunking is due to needing to work on: < 2.7.14, 3.5.3
+     - Issue #27130: In the "zlib" module, fix handling of large buffers
+      (typically 2 or 4 GiB).  Previously, inputs were limited to 2 GiB, and
+      compression and decompression operations did not properly handle results of
+      2 or 4 GiB.
+      Fixed in: 2.7.14, 3.5.3
+    """
+    if sys.version_info.major == 2:
+        if sys.version_info < (2, 7, 14):
+            return False
+        else:
+            return True
+    elif sys.version_info < (3, 5, 3):
+        return False
+    else:
+        return True
+
+
 def doGzip(data, compresslevel=1):
     """
     Helper function for compressing byte strings.
@@ -1421,25 +1473,37 @@ def doGzip(data, compresslevel=1):
       compression and decompression operations did not properly handle results of
       2 or 4 GiB.
 
+    Fixed in: 2.7.14, 3.5.3
+
     @type  data: byte string
     @param data: The data to compress.
     @rtype: byte string
     @return: The compressed byte string.
     """
-    log_internal.debug("data len {}".format(len(data)))
+    if not isinstance(data, bytes):
+        if sys.version_info.major < 3:
+            data = str(data).encode('UTF-8')
+        else:
+            data = str(data, 'UTF-8')
+    log_internal.debug("Compress byte string with length: {}".format(len(data)))
 
-    str_io = cStringIO.StringIO()
-    gz_file = gzip.GzipFile(mode='wb', compresslevel=1, fileobj=str_io)
+    buffer = io.BytesIO()
+    gz_file = gzip.GzipFile(mode='wb', compresslevel=compresslevel, fileobj=buffer)
+    try:
+        if zlib_buffer_fixed():
+            gz_file.write(data)
+        else:
+            for offset in range(0, len(data), 2**30):
+                gz_file.write(data[offset:offset+2**30])
+    finally:
+        gz_file.close()
 
-    for offset in range(0, len(data), 2**30):
-        gz_file.write(data[offset:offset+2**30])
-    gz_file.close()
+    return buffer.getvalue()
 
-    return str_io.getvalue()
 
 def doGunzip(data):
     """
-    Helper function for compressing byte strings.
+    Helper function for decompressing byte strings.
 
     Chunking is due to needing to work on pythons < 2.7.13:
     - Issue #27130: In the "zlib" module, fix handling of large buffers
@@ -1452,35 +1516,46 @@ def doGunzip(data):
     @rtype: byte string
     @return: The uncompressed byte string.
     """
-    log_internal.debug("data len {}".format(len(data)))
+    log_internal.debug("Decompress byte string with length: {}".format(len(data)))
 
-    str_io = cStringIO.StringIO(data)
-    gz_file = gzip.GzipFile(mode='rb', fileobj=str_io)
-    read_csio = cStringIO.StringIO()
+    data_buffer = io.BytesIO(data)
+    gz_file = gzip.GzipFile(mode='rb', fileobj=data_buffer)
 
-    while True:
-        uncompressed_data = gz_file.read(2**30)
-        if uncompressed_data:
-            read_csio.write(uncompressed_data)
+    try:
+        if zlib_buffer_fixed():
+            read_buffer = io.BytesIO(gz_file.read())
         else:
-            break
+            read_buffer = io.BytesIO()
+            while True:
+                uncompressed_data = gz_file.read(2**30)
+                if uncompressed_data:
+                    read_buffer.write(uncompressed_data)
+                else:
+                    break
+    finally:
+        gz_file.close()
 
-    return read_csio.getvalue()
+    return read_buffer.getvalue()
+
 
 def doPickle(obj):
-    log_internal.debug("obj {}".format(type(obj)))
+    log_internal.debug("Pickle object of type: {}".format(type(obj)))
     return pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
 
+
 def doUnpickle(data):
-    log_internal.debug("data len {}".format(len(data)))
+    log_internal.debug("Unpickle byte string of length: {}".format(len(data)))
     return pickle.loads(data)
 
 
 _attachment_handlers = collections.OrderedDict()
-def registerAttachmentType(type_,
+def registerAttachmentType(
+        type_,
         serialize_func=doPickle,
         deserialize_func=doUnpickle,
-        content_type='application/octet-stream', gzip=True):
+        content_type='application/octet-stream',
+        gzip=True
+):
     """
     @type  type_: type
     @param type_: Instances of this type will be stored as attachments instead of CouchDB documents.
@@ -1533,7 +1608,7 @@ class CouchableAttachment(object):
         @rtype: byte string
         @return: The serialized data.
         """
-        return pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+        return doPickle(obj)
 
     @staticmethod
     def unpack(data):
@@ -1547,7 +1622,7 @@ class CouchableAttachment(object):
         @rtype: object
         @return: The unserialized object.
         """
-        return pickle.loads(data)
+        return doUnpickle(data)
 
 registerAttachmentType(CouchableAttachment,
         lambda obj: CouchableAttachment.pack(obj),
@@ -1580,22 +1655,23 @@ def findBadJson(obj, prefix=''):
             bad_list.extend(findBadJson(v, '{}[{}]'.format(prefix, i)))
     elif isinstance(obj, dict):
         for k, v in obj.items():
-            if isinstance(k, (str, int, float)):
+            if isinstance(k, string_types + integer_types + (float,)):
                 bad_list.extend(findBadJson(v, '{}[{!r}]'.format(prefix, k)))
             else:
                 bad_list.append('{} key {}'.format(prefix, k))
     elif isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             bad_list.append('{} value {}, {}'.format(prefix, obj, type(obj)))
-    elif isinstance(obj, str):
+    elif isinstance(obj, bytes):
+        # By JSON standard there should only be unicode strings, but we keep this check
         try:
-            obj.encode('ascii')
-        except:
-            bad_list.append('{} not ascii {}, {}'.format(prefix, obj, type(obj)))
-    elif isinstance(obj, (int, unicode)):
+            obj.decode('UTF-8')
+        except UnicodeDecodeError:
+            bad_list.append('{} not UTF-8 {}, {}'.format(prefix, obj, type(obj)))
+    elif isinstance(obj, string_types + integer_types):
         pass
     else:
-        bad_list.append('{} type {}, {}'.format(prefix, obj, type(obj)))
+        bad_list.append('{} unexpected type {}, {}'.format(prefix, obj, type(obj)))
 
     return bad_list
 

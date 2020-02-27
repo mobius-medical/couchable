@@ -18,15 +18,15 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 # THE SOFTWARE.
 
+# Future compatibility
+from __future__ import division, absolute_import, print_function, unicode_literals
 
 # stdlib
 import collections
 import copy
-import cPickle as pickle
 import datetime
 import doctest
 import gc
-import random
 import re
 import sys
 import time
@@ -40,6 +40,14 @@ from nose.plugins.attrib import attr
 # in-house
 import couchable
 import couchable.core
+
+# Compatibility imports
+if sys.version_info.major < 3:
+    import cPickle as pickle
+else:
+    import pickle
+# Print python version for test log
+print(sys.version)
 
 #def dumpcdb(func):
 #    def test_dumpcdb_(self):
@@ -242,7 +250,7 @@ class TestCouchable(unittest.TestCase):
         cdb_list = [couchable.CouchableDb('testing_couchable_' + str(i)) for i in range(n)]
         t1 = time.time()
 
-        print 'first', t1-t0
+        print('first', t1-t0)
 
         for cdb in cdb_list:
             del couchdb.Server(cdb.server_url)[cdb.name]
@@ -254,7 +262,7 @@ class TestCouchable(unittest.TestCase):
         cdb_list = [couchable.CouchableDb('testing_couchable_' + str(i)) for i in range(n)]
         t1 = time.time()
 
-        print 'create', t1-t0
+        print('create', t1-t0)
 
         cdb_list = []
         gc.collect()
@@ -263,13 +271,13 @@ class TestCouchable(unittest.TestCase):
         cdb_list = [couchable.CouchableDb('testing_couchable_' + str(i)) for i in range(n)]
         t1 = time.time()
 
-        print 'exists', t1-t0
+        print('exists', t1-t0)
 
         t0 = time.time()
         cdb_list = [couchable.CouchableDb('testing_couchable_' + str(i), exists=True) for i in range(n)]
         t1 = time.time()
 
-        print 'exists w/ flag', t1-t0
+        print('exists w/ flag', t1-t0)
 
         for cdb in cdb_list:
             del couchdb.Server(cdb.server_url)[cdb.name]
@@ -286,7 +294,6 @@ class TestCouchable(unittest.TestCase):
         del obj
         gc.collect()
         self.assertFalse(self.cdb._obj_by_id, repr(self.cdb._obj_by_id.items()))
-
 
         obj = self.cdb.load(_id)
 
@@ -376,7 +383,7 @@ class TestCouchable(unittest.TestCase):
 
     @attr('couchable')
     def test_21_binaryStrings_1(self):
-        s = 'abc\xaa\xbb\xcc this is the tricky part: \\xddd'
+        s = b'abc\xaa\xbb\xcc this is the tricky part: \\xddd'
         obj = Simple(s=s)
 
         _id = self.cdb.store(obj)
@@ -393,7 +400,7 @@ class TestCouchable(unittest.TestCase):
     @attr('couchable')
     def test_21_binaryStrings_2(self):
         #s = 'abc\xaa\xbb\xcc this is the tricky part: \\xddd'
-        s = ''.join([chr(x) for x in range(256)])
+        s = bytes(tuple(x for x in range(256)))
         obj = Simple(s=s)
 
         _id = self.cdb.store(obj)
@@ -947,7 +954,7 @@ class TestCouchable(unittest.TestCase):
         c = SimpleDoc(name='CCC', attach=SimpleAttachment(c=1, cc=2), bb=b)
         a = SimpleDoc(name='AAA', attach=SimpleAttachment(a=1, aa=2), bb=b,
                 dt=datetime.datetime.now(),
-                td=datetime.timedelta(seconds=1.5),
+                td=datetime.timedelta(seconds=2.5),
                 regex=re.compile('[a-z]+'),
             )
 
@@ -992,7 +999,7 @@ class TestCouchable(unittest.TestCase):
         c = AftermarketDoc(name='CCC', attach=AftermarketAttachment(c=1, cc=2), bb=b)
         a = AftermarketDoc(name='AAA', attach=AftermarketAttachment(a=1, aa=2), bb=b,
                 dt=datetime.datetime.now(),
-                td=datetime.timedelta(seconds=1.5),
+                td=datetime.timedelta(seconds=2.5),
                 regex=re.compile('[a-z]+'),
             )
 
